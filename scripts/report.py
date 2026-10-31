@@ -88,7 +88,7 @@ def main():
     evidence = DOCS / "evidence.md"
     content = evidence.read_text()
     begin = content.index("## Measurements\n")
-    end = content.index("## Index choice\n", begin)
+    end = content.index("## What changed\n", begin)
     content = content[:begin] + "## Measurements\n\n" + "\n".join(rows) + "\n" + content[end:]
     evidence.write_text(content)
 
