@@ -1,8 +1,8 @@
 # Departure search measurements
 
-23 October 2026, UTC. PostgreSQL 17, 120,008 trips. The baseline and rewritten queries return the same ordered rows for the first 20 and the full day on R-7 and R-0.
+PostgreSQL 17 with the supplied 120,008-trip fixture. All searches use 23 October 2026 in UTC.
 
-The timings below use one warm-up and five measured executions per query. The range is the smallest to largest `Execution Time`. Buffer values come from the top plan node and are not summed across nodes.
+The baseline was measured before any additional index. I then measured the rewritten query, a route-only index and a partial multicolumn index. Each measurement had one warm-up and five recorded executions. The table uses the median `Execution Time` and the minimum and maximum times. Buffer counts are from the top node of the last plan, not the sum of every node. These timings are from one GitHub Actions runner, not a general performance guarantee.
 
 ## Measurements
 
@@ -23,33 +23,66 @@ All four correctness checks passed after the rewrite and after each index. They 
 
 Raw plans: `baseline-*.txt`, `rewrite-*.txt`, `route-*.txt`, `index-*.txt` in this directory.
 
+## What changed
+
+The baseline plan read all 120,008 trips with a sequential scan and then sorted the matching rows. For R-7, it removed 119,970 rows during filtering before returning the first 20. Rewriting the date condition as a half-open UTC range made it usable by a B-tree index, but it still used a sequential scan and a sort until an index was added.
+
+With an index on `route_id` alone, R-7 used a bitmap heap scan and a sort. PostgreSQL still chose a sequential scan and a top-N sort for R-0. This is why the route-only index was not enough for the busier route.
+
+With the partial multicolumn index, both routes used an ordered index scan without a separate sort. The top-node shared buffer hits were 23 for R-7 and 24 for R-0, compared with 1,007 for the baseline plans. No shared reads were reported in these warm runs.
+
+The correctness checks passed after every change. Both routes matched the baseline for the first 20 and the full day (38 trips on R-7; 991 on R-0), in the same order. This includes the departure at `00:00:00`, the final microsecond before midnight and exclusion of the following day's midnight and cancelled departures.
+
 ## Index choice
 
-The first candidate indexes `route_id` alone. It can narrow the route search, but it cannot supply the departure-time ordering. A sort may still be needed.
+I would keep `trips_scheduled_route_departure_idx`:
 
-The selected index is `(route_id, scheduled_departure_utc, id)` restricted to `status = 'Scheduled'`. The equality condition comes first, followed by the UTC range and the two ordering columns. This allows an ordered index scan to stop after the first 20 matches without sorting a whole day. The partial predicate excludes cancelled trips. The primary-key index remains in place.
+```sql
+create index trips_scheduled_route_departure_idx
+    on lab08.trips (route_id, scheduled_departure_utc, id)
+    where status = 'Scheduled';
+```
 
-A route-only index is a reasonable comparison but not the index I would keep for this screen. The plan and measurements above are the final check on whether that choice helps in practice, especially for the busier R-0 route.
+The `route_id` equality comes first, followed by the time range and the ordering by time and ID. The partial predicate keeps cancelled trips out of this index.
 
-An additional B-tree takes disk space and makes writes more expensive. Inserts of scheduled trips and changes to their route or departure time update the index. Cancelling a scheduled trip removes it from the partial index; changing a cancelled trip back to scheduled adds it.
+I would not keep `trips_route_only_idx`. It occupies 832 kB and helped R-7, but not R-0. The selected index is larger at 4,408 kB, yet avoids both the large scan and sort for these searches. The primary-key index was not changed.
+
+An extra index also costs write work. A new scheduled trip adds an entry. A changed route or departure time moves its entry, and cancelling the trip removes it from this partial index. The larger index also needs more storage and maintenance.
 
 ## AI check
 
-Prompt used for a second opinion:
+I used the following question for a second opinion on an index candidate:
 
-> PostgreSQL 17 has `lab08.trips(id bigint primary key, route_id text, scheduled_departure_utc timestamptz, status text)`. The search selects id, route_id, scheduled_departure_utc and status, filters one route, `status = 'Scheduled'` and one UTC day's half-open departure range, orders by scheduled_departure_utc and id, and limits to 20. The existing index is the primary key on id. The baseline reads the date by casting `(scheduled_departure_utc at time zone 'UTC')::date`; its execution plans are saved in `docs/baseline-r7.txt` and `docs/baseline-r0.txt`. Suggest one B-tree index to test against an index on route_id alone, and explain the likely ordering and write costs.
+> PostgreSQL 17. The table is `lab08.trips(id bigint primary key, route_id text not null, scheduled_departure_utc timestamptz not null, status text not null)`. Its only starting index is `trips_pkey` on `id`.
+>
+> The search is:
+>
+> ```sql
+> select id, route_id, scheduled_departure_utc, status
+> from lab08.trips
+> where route_id = :'route_id'
+>   and status = 'Scheduled'
+>   and scheduled_departure_utc >= (:'query_day'::date::timestamp at time zone 'UTC')
+>   and scheduled_departure_utc < ((:'query_day'::date + 1)::timestamp at time zone 'UTC')
+> order by scheduled_departure_utc, id
+> limit :result_limit;
+> ```
+>
+> For R-7, the original query's plan was `Limit -> Sort -> Seq Scan on trips`, with 38 matching rows and 119,970 rows removed by the filter. Its top node had 1,007 shared buffer hits; the median execution time was 7.671 ms. R-0 also used `Limit -> Sort -> Seq Scan` and had a 13.818 ms median. Suggest one index worth testing against a single-column index on `route_id`. Consider the ordering, scheduled status and cost of updates.
 
-Suggested index: a partial B-tree on `(route_id, scheduled_departure_utc, id)` for scheduled trips. I accepted it as the second candidate because it matches both the filter and ordering. The results above, not the suggestion alone, decide which index to keep.
+The suggestion was a partial B-tree on `(route_id, scheduled_departure_utc, id)` restricted to scheduled trips. I tested it against the route-only index rather than accepting it on the suggestion alone. The scan types, sort operations, buffers and median times above supported keeping it.
 
 ## Monthly validation history
 
-The supplied partitioning script compares the ordinary table with September, October and November partitions.
+The supplied script produced the same data in both layouts: 40,889 October events, 12 events for ticket 100 and zero differences between the two sets of ticket-history rows.
 
-| Read | Expected result | What the plan means |
+| Read | Ordinary table | Monthly partitions |
 | --- | --- | --- |
-| October count | 40,889 in both tables | The UTC month bounds allow pruning to `validations_oct`. The unpartitioned table is scanned or indexed as one table. |
-| Ticket 100 | 12 in both tables; zero row differences | No date predicate is supplied, so all three monthly partitions must be considered. |
+| October count | `Seq Scan` on `validations_plain`, 79,111 rows filtered out, 765 shared hits, 8.686 ms | Only `validations_oct` scanned, 261 shared hits, 5.130 ms |
+| Ticket 100 history | `Seq Scan` on `validations_plain` and `Sort`, 771 shared hits, 4.575 ms | `Append` of scans on `validations_sep`, `validations_oct`, `validations_nov`, then `Sort`; 766 shared hits, 4.878 ms |
 
-Monthly partitions are useful for date-bounded reports and for removing old months as units. They are less convincing for a ticket-history lookup without a date filter: partition pruning cannot remove a month, and each partition may need to be scanned. Partitioning itself does not create an index on `ticket_id`. If support lookups become the main concern, that indexing question should be assessed separately.
+These partition timings are single `EXPLAIN ANALYZE` runs, not five-run medians. The actual plans are in `docs/partition-plans.txt`.
 
-See `docs/partition-plans.txt` for the two layouts' actual plans once measurements have run.
+The October report can prune September and November because the time predicate stays inside October's partition boundaries. The ticket lookup only filters on `ticket_id`; without a time range, PostgreSQL must consider every month. Its 12 events were distributed as 4 in September, 3 in October and 5 in November.
+
+I would use monthly partitions if month-based reports and retention matter. Removing an old month can then be handled by detaching or dropping its partition instead of deleting its rows individually. For ticket support alone, monthly partitioning does not solve the lookup: the table has no index on `ticket_id`, so all months were scanned. Partition management also adds some complexity.
