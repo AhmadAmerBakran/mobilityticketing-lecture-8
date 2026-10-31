@@ -1,0 +1,49 @@
+name: Measure PostgreSQL queries
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose up -d --wait postgres
+          docker compose exec -T postgres bash /lab/run.sh reset > docs/fixture.txt
+          docker compose exec -T postgres bash /lab/run.sh measure baseline R-7 > docs/baseline-r7.txt
+          docker compose exec -T postgres bash /lab/run.sh measure baseline R-0 > docs/baseline-r0.txt
+          docker compose exec -T postgres bash /lab/run.sh check > docs/check-rewrite.txt
+          docker compose exec -T postgres bash /lab/run.sh measure candidate R-7 > docs/rewrite-r7.txt
+          docker compose exec -T postgres bash /lab/run.sh measure candidate R-0 > docs/rewrite-r0.txt
+          docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U mobility -d mobility_l08 -v route_only=1 -f /lab/queries/indexes.sql
+          docker compose exec -T postgres psql -X -A -t -F '|' -U mobility -d mobility_l08 -c "select indexname, pg_size_pretty(pg_relation_size(format('%I.%I', schemaname, indexname)::regclass)) from pg_indexes where schemaname='lab08' and tablename='trips';" > docs/route-index-sizes.txt
+          docker compose exec -T postgres bash /lab/run.sh check > docs/check-route.txt
+          docker compose exec -T postgres bash /lab/run.sh measure candidate R-7 > docs/route-r7.txt
+          docker compose exec -T postgres bash /lab/run.sh measure candidate R-0 > docs/route-r0.txt
+          docker compose exec -T postgres bash /lab/run.sh indexes > docs/selected-indexes.txt
+          docker compose exec -T postgres psql -X -A -t -F '|' -U mobility -d mobility_l08 -c "select indexname, pg_size_pretty(pg_relation_size(format('%I.%I', schemaname, indexname)::regclass)) from pg_indexes where schemaname='lab08' and tablename='trips';" > docs/selected-index-sizes.txt
+          docker compose exec -T postgres bash /lab/run.sh check > docs/check-index.txt
+          docker compose exec -T postgres bash /lab/run.sh measure candidate R-7 > docs/index-r7.txt
+          docker compose exec -T postgres bash /lab/run.sh measure candidate R-0 > docs/index-r0.txt
+          docker compose exec -T postgres bash /lab/run.sh partitions > docs/partition-plans.txt
+          python3 scripts/report.py
+          cat docs/check-rewrite.txt docs/check-route.txt docs/check-index.txt
+          sed -n '/^## Measurements$/,/^## Index choice$/p' docs/evidence.md
+      - name: Save plans and notes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/
+          if ! git diff --cached --quiet; then
+            git commit -m 'Record query measurements and execution plans'
+            git push
+          fi
