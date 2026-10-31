@@ -1,0 +1,4 @@
+PASS: R-7, LIMIT 20. Same 20 rows in the same order.
+PASS: R-7, LIMIT NULL. Same 38 rows in the same order.
+PASS: R-0, LIMIT 20. Same 20 rows in the same order.
+PASS: R-0, LIMIT NULL. Same 991 rows in the same order.

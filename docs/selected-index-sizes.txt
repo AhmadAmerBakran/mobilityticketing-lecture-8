@@ -1,0 +1,2 @@
+trips_pkey|2640 kB
+trips_scheduled_route_departure_idx|4408 kB

@@ -1,0 +1,34 @@
+DROP SCHEMA
+CREATE SCHEMA
+SET
+CREATE TABLE
+INSERT 0 120000
+INSERT 0 8
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+INSERT 0 120000
+INSERT 0 120000
+ANALYZE
+ANALYZE
+ANALYZE
+ trips  
+--------
+ 120008
+(1 row)
+
+ route_id | scheduled_on_23_october 
+----------+-------------------------
+ R-0      |                     991
+ R-7      |                      38
+(2 rows)
+
+  month  | validations 
+---------+-------------
+ 2026-09 |       39570
+ 2026-10 |       40889
+ 2026-11 |       39541
+(3 rows)
+

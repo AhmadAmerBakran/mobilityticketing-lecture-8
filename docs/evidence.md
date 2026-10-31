@@ -6,7 +6,22 @@ The timings below use one warm-up and five measured executions per query. The ra
 
 ## Measurements
 
-Not measured yet. The repository's benchmark workflow records the raw plans here and fills this table.
+| Route | Query | Median ms | Range ms | Plan nodes | Top-node hit / read buffers |
+| --- | --- | ---: | ---: | --- | ---: |
+| R-7 | Baseline | 7.671 | 7.503–8.497 | Seq Scan, Sort | 1007 / 0 |
+| R-7 | UTC range | 6.574 | 6.544–6.657 | Seq Scan, Sort | 1007 / 0 |
+| R-7 | Route-only | 1.800 | 1.744–1.837 | Bitmap Heap Scan, Bitmap Index Scan, Sort | 1011 / 0 |
+| R-7 | Selected index | 0.132 | 0.125–0.157 | Index Scan | 23 / 0 |
+| R-0 | Baseline | 13.818 | 13.734–13.906 | Seq Scan, Sort | 1007 / 0 |
+| R-0 | UTC range | 6.665 | 6.573–6.848 | Seq Scan, Sort | 1007 / 0 |
+| R-0 | Route-only | 6.809 | 6.719–6.952 | Seq Scan, Sort | 1007 / 0 |
+| R-0 | Selected index | 0.130 | 0.121–0.141 | Index Scan | 24 / 0 |
+
+Index sizes: route-only **832 kB**; selected **4408 kB**.
+
+All four correctness checks passed after the rewrite and after each index. They compare the first 20 and the complete day for R-7 and R-0.
+
+Raw plans: `baseline-*.txt`, `rewrite-*.txt`, `route-*.txt`, `index-*.txt` in this directory.
 
 ## Index choice
 

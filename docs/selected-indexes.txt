@@ -1,0 +1,9 @@
+DROP INDEX
+DROP INDEX
+CREATE INDEX
+              indexname              |                                                                        indexdef                                                                        |  size   
+-------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+---------
+ trips_pkey                          | CREATE UNIQUE INDEX trips_pkey ON lab08.trips USING btree (id)                                                                                         | 2640 kB
+ trips_scheduled_route_departure_idx | CREATE INDEX trips_scheduled_route_departure_idx ON lab08.trips USING btree (route_id, scheduled_departure_utc, id) WHERE (status = 'Scheduled'::text) | 4408 kB
+(2 rows)
+

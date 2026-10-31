@@ -1,0 +1,2 @@
+trips_pkey|2640 kB
+trips_route_only_idx|832 kB
